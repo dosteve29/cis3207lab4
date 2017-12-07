@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #define BLOCKS 4096
+#define BLOCK_SIZE 1024
 
 //this is each individual entry in the file allocation table
 typedef struct fileAllocationEntry{
@@ -22,66 +23,106 @@ typedef struct fileAllocationTable{
 } FAT;
 
 //Each entry in directory entry table structure
-//each entry is 32 bytes long
+//each entry is 64 bytes long
 typedef struct entry{
     unsigned short fileSize; //2 bytes
-    unsigned int lastModified; //8 bytes
+    char time[9]; //9 bytes
+    char date[9]; //9 bytes;
     unsigned short startingIndex; //2 bytes
     char folder; //1 byte
-    char extension[3]; //3 bytes
-    char filename[16]; //16 bytes
+    char extension[4]; //4 bytes (3 extension + terminator)
+    char filename[37]; //37 bytes (36 filename + terminator)
 } Entry;
 
-//Directory Entry Table that occupies each 512 byte
-//since each entry is 32 bytes long,
+//Directory Entry Table that occupies each 1024 byte
+//since each entry is 64 bytes long,
 //each data block or directory table can hold 16 entries
-//32 * 16 = 512
+//64 * 16 = 1024;
 typedef struct directoryTable{
     Entry entry[16];
 } directory;
 
 typedef struct sector{
-    char sect[512];
+    char sect[BLOCK_SIZE];
 } Sector;
 
 typedef struct dataBlock{
     Sector blocks[BLOCKS];
 } DATA;
 
-void editFAT(FAT *fat, int index);
+//function prototype
+void getDate(char *dateString);
+void getTime(char *timeString);
+void fs_initialize(int fd, FAT *fat, DATA *data, Entry *root);
+void editFileSize(unsigned short oldSize, unsigned short newSize);
+void editIndex(unsigned short oldIndex, unsigned short newIndex);
+void editFolder(char oldFolder, char newFolder);
+void editExt(char * oldExtension, char * newExtension);
+void editFilename(char * oldFilename, char * newFilename);
 
 int main(int argc, char ** args){
+    FAT *fat;
+    DATA *data;
+    Entry *root;
+
     //create file large enough to hold both FAT and 512 byte blocks
     int fd = open("Drive", O_RDWR|O_CREAT, 0660);
-    ftruncate(fd, sizeof(FAT) + 32 + BLOCKS * 512);
+    ftruncate(fd, sizeof(FAT) + sizeof(Entry) + BLOCKS * BLOCK_SIZE);
+    fat = mmap(NULL, sizeof(FAT), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    data = mmap(NULL, sizeof(DATA), PROT_READ | PROT_WRITE, MAP_SHARED, fd, sizeof(FAT));
+    root = mmap(NULL, sizeof(Entry), PROT_READ | PROT_WRITE, MAP_SHARED, fd, sizeof(FAT) + sizeof(DATA));
 
-    //map each section of drive to a mmap pointer
-    FAT *fat = mmap(0, sizeof(FAT), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-    DATA *data = mmap(0, sizeof(DATA), PROT_READ|PROT_WRITE, MAP_SHARED, fd, sizeof(FAT));
-    Entry *root = mmap(0, 32, PROT_READ|PROT_WRITE, MAP_SHARED, fd, sizeof(FAT) + (BLOCKS * 512));
-
-    /* char * string = "Hello"; */
-    /* memcpy(&data->blocks[0], string, sizeof(directory)); */
-
-    /* directory rootDir; */
-    /* rootDir.entry[0].fileSize = 30000; */
-    /* rootDir.entry[0].lastModified = 152; */
-    /* rootDir.entry[0].startingIndex = 12; */
-    /* rootDir.entry[0].folder = 0; */
-    /* char * ext = "txt"; */
-    /* char * name = "giraffe"; */
-    /* strcpy(rootDir.entry[0].extension, ext); */
-    /* strcpy(rootDir.entry[0].filename, name); */
-    /*  */
-    /* memcpy(&data->blocks[0], &rootDir, sizeof(Sector)); */
-    /*  */
-    /* printf("%s\n", rootDir2.name);  */
+    fs_initialize(fd, fat, data, root);
 
     close(fd);
     exit(0);
 }
 
-void editFAT(FAT *fat, int index){
-    fat->file[index].busy = 1;
-    fat->file[index].next = -1;
+void fs_initialize(int fd, FAT *fat, DATA *data, Entry *root){
+   //initialize the root directory metadata
+   editFileSize(root->fileSize, 123);
+   editIndex(root->startingIndex, 0);
+   editFolder(root->folder, 1);
+   getTime(root->time);
+   getDate(root->date);
+   editExt(root->extension, "   ");
+   editFilename(root->filename, "root");
+}
+
+void getTime(char *timeString){
+    time_t current_time;
+    struct tm * time_info;
+
+    time(&current_time);
+    time_info = localtime(&current_time);
+    char time[9];
+    strftime(time, sizeof(time), "%X", time_info);
+    strcpy(timeString, time);
+}
+
+void getDate(char *dateString){
+    time_t current_time;
+    struct tm * time_info;
+    time(&current_time);
+    time_info = localtime(&current_time);
+    char date[9];
+
+    strftime(date, sizeof(date), "%x", time_info);
+    strcpy(dateString, date);
+}
+
+void editFileSize(unsigned short oldSize, unsigned short newSize){
+    oldSize = newSize;
+}
+void editIndex(unsigned short oldIndex, unsigned short newIndex){
+    oldIndex = newIndex;
+}
+void editFolder(char oldFolder, char newFolder){
+    oldFolder = newFolder;
+}
+void editExt(char * oldExtension, char * newExtension){
+    strcpy(oldExtension, newExtension);
+}
+void editFilename(char * oldFilename, char * newFilename){
+    strcpy(oldFilename, newFilename);
 }
