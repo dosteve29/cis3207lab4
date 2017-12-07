@@ -63,6 +63,10 @@ void editFolder(char *oldFolder, char newFolder);
 void editExt(char * oldExtension, char * newExtension);
 void editFilename(char * oldFilename, char * newFilename);
 short nextFreeBlock(FAT * fat);
+short nextFreeEntry(directory *dir);
+void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext);
+void createDir(FAT * fat, DATA * data, int dirBlock, char * filename);
+void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf);
 
 //MAIN STARTS HERE
 int main(int argc, char ** args){
@@ -80,35 +84,13 @@ int main(int argc, char ** args){
 
     //initialize the file system 
     fs_initialize(fat, root);
+    createFile(fat, data, 0, "steve", "txt");
+    createDir(fat, data, 0, "giraffe");
 
-    //create a file in root directory
-    directory *rootDir = malloc(sizeof(*rootDir));
-    memcpy(rootDir, &(data->blocks[0]), sizeof(*rootDir));
-
-    /* rootDir->entry[0].startingIndex = 3; */
-    /* int i; */
-    /* for (i = 0; i < MAX_ENTRIES; i++){ */
-    /*     printf("Entry %d    Starting index: %d\n", i, rootDir->entry[i].startingIndex); */
-    /* } */
-
-    //1. find the next free block in FAT
-    short freeBlock = nextFreeBlock(fat);
-    //2. set the free block as busy now
-    fat->file[freeBlock].busy = 1;
-    fat->file[freeBlock].next = -1;
-    //3. copy the data to appropriate DATA block
-    char * stringToWrite = "Hello this is steve";
-    strcpy(data->blocks[freeBlock].sect, stringToWrite);
-    //4. edit directory metadata
-    editFileSize(&rootDir->entry[0].fileSize, strlen(stringToWrite));
-    editIndex(&rootDir->entry[0].startingIndex, freeBlock);
-    editFolder(&rootDir->entry[0].folder, 0);
-    getTime(rootDir->entry[0].time);
-    getDate(rootDir->entry[0].date);
-    editExt(rootDir->entry[0].extension, "txt");
-    editFilename(rootDir->entry[0].filename, "steve");
-    memcpy(&(data->blocks[0]), rootDir, sizeof(*rootDir));
-
+    /* //3. copy the data to appropriate DATA block */
+    /* char * stringToWrite = "Hello this is steve"; */
+    /* strcpy(data->blocks[freeBlock].sect, stringToWrite); */
+    
     close(fd);
     exit(0);
 }
@@ -175,4 +157,65 @@ short nextFreeBlock(FAT * fat){
         }
     }
     return -1;
+}
+
+short nextFreeEntry(directory *dir){
+    short i;
+    for (i = 0; i < MAX_ENTRIES; i++){
+        if (dir->entry[i].startingIndex == 0){
+            return i;
+        }
+    }
+    return -1;
+}
+
+void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext){
+    //open the current directory
+    directory *dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
+
+    //find next free block and fill up FAT
+    short freeBlock = nextFreeBlock(fat);
+    fat->file[freeBlock].busy = 1;
+    fat->file[freeBlock].next = -1;
+
+    //find next free entry in the dirBlock
+    short freeEntry = nextFreeEntry(dir);
+
+    //edit the directory entry metadata for the file
+    editFileSize(&dir->entry[freeEntry].fileSize, 0);
+    editIndex(&dir->entry[freeEntry].startingIndex, freeBlock);
+    editFolder(&dir->entry[freeEntry].folder, 0);
+    getTime(dir->entry[freeEntry].time);
+    getDate(dir->entry[freeEntry].date);
+    editExt(dir->entry[freeEntry].extension, ext);
+    editFilename(dir->entry[freeEntry].filename, filename);
+    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+}
+
+void createDir(FAT * fat, DATA * data, int dirBlock, char * filename){
+    //open the current directory
+    directory *dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
+
+    //find next free block and fill up FAT
+    short freeBlock = nextFreeBlock(fat);
+    fat->file[freeBlock].busy = 1;
+    fat->file[freeBlock].next = -1;
+
+    short freeEntry = nextFreeEntry(dir);
+
+    //edit the directory entry metadata for the file
+    editFileSize(&dir->entry[freeEntry].fileSize, 0);
+    editIndex(&dir->entry[freeEntry].startingIndex, freeBlock);
+    editFolder(&dir->entry[freeEntry].folder, 1);
+    getTime(dir->entry[freeEntry].time);
+    getDate(dir->entry[freeEntry].date);
+    editExt(dir->entry[freeEntry].extension, "   ");
+    editFilename(dir->entry[freeEntry].filename, filename);
+    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+}
+
+void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf){
+
 }
