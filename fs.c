@@ -67,6 +67,7 @@ short nextFreeEntry(directory *dir);
 void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext);
 void createDir(FAT * fat, DATA * data, int dirBlock, char * filename);
 void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf);
+int findFileEntry(directory * dir, char * filename, char * ext);
 
 //MAIN STARTS HERE
 int main(int argc, char ** args){
@@ -86,6 +87,7 @@ int main(int argc, char ** args){
     fs_initialize(fat, root);
     createFile(fat, data, 0, "steve", "txt");
     createDir(fat, data, 0, "giraffe");
+    writeToFile(fat, data, 0, "steve", "txt", "Hello this is steve");
 
     /* //3. copy the data to appropriate DATA block */
     /* char * stringToWrite = "Hello this is steve"; */
@@ -217,5 +219,30 @@ void createDir(FAT * fat, DATA * data, int dirBlock, char * filename){
 }
 
 void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf){
+    //open the current directory
+    directory *dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
 
+    //get the entry with the filename and extension
+    int file = findFileEntry(dir, filename, ext);
+    if (file == -1){
+        printf("File not found!\n");
+        return;
+    } else{
+        int dataBlock = dir->entry[file].startingIndex;
+        printf("File located in block: %d\n", dataBlock);
+        strcpy(data->blocks[dataBlock].sect, buf);
+        editFileSize(&dir->entry[file].fileSize, strlen(buf));
+    }
+    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+}
+
+int findFileEntry(directory * dir, char * filename, char * ext){
+    int i;
+    for (i = 0; i < MAX_ENTRIES; i++){
+        if (((strcmp(dir->entry[i].filename, filename)) == 0) && ((strcmp(dir->entry[i].extension, ext)) == 0)){
+            return i;
+        }
+    }
+    return -1;
 }
