@@ -64,10 +64,23 @@ void editExt(char * oldExtension, char * newExtension);
 void editFilename(char * oldFilename, char * newFilename);
 short nextFreeBlock(FAT * fat);
 short nextFreeEntry(directory *dir);
-void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext);
-void createDir(FAT * fat, DATA * data, int dirBlock, char * filename);
-void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf);
+void createFile(FAT * fat, DATA * data, char * filename, char * ext);
+void createDir(FAT * fat, DATA * data, char * filename);
+void writeToFile(FAT * fat, DATA * data, char * filename, char * ext, char * buf);
+int findFileOffset(FAT * fat, DATA * data, directory * dir, int file);
 int findFileEntry(directory * dir, char * filename, char * ext);
+void deleteFile(FAT * fat, DATA * data, char * filename, char * ext);
+void readFile(FAT * fat, DATA * data, char * filename, char * ext);
+int isEmpty();
+int isFull();
+int peek();
+int pop();
+void push(int dirBlock);
+int cd(DATA * data, char * dirName);
+
+//current directory stack
+int stack[BLOCKS];
+int top = 0; 
 
 //MAIN STARTS HERE
 int main(int argc, char ** args){
@@ -75,6 +88,9 @@ int main(int argc, char ** args){
     FAT *fat;
     DATA *data;
     Entry *root;
+
+    //the first element of directory stack will always be 0, the root dir
+    stack[top] = 0; 
 
     //create file large enough to hold both FAT, DATA, and root
     int fd = open("Drive", O_RDWR|O_CREAT, 0660);
@@ -85,14 +101,26 @@ int main(int argc, char ** args){
 
     //initialize the file system 
     fs_initialize(fat, root);
-    createFile(fat, data, 0, "steve", "txt");
-    createDir(fat, data, 0, "giraffe");
-    writeToFile(fat, data, 0, "steve", "txt", "Hello this is steve");
-
-    /* //3. copy the data to appropriate DATA block */
-    /* char * stringToWrite = "Hello this is steve"; */
-    /* strcpy(data->blocks[freeBlock].sect, stringToWrite); */
-    
+    createDir(fat, data, "penguin");
+    if (cd(data, "penguin")){
+        createFile(fat, data, "steve", "txt");
+        char buff[1500];
+        memset(buff, '\0', sizeof(buff));
+        int i;
+        for (i = 0; i < 1499; i++){
+            buff[i] = 'h';
+        }
+        writeToFile(fat, data, "steve", "txt", buff);
+        writeToFile(fat, data, "steve", "txt", "Hello this is steve");
+        readFile(fat, data, "steve", "txt");
+        /* deleteFile(fat, data, "steve", "txt"); */
+        /* createFile(fat, data, "steve", "txt"); */
+        /* writeToFile(fat, data, "steve", "txt", "deleted file"); */
+        /* writeToFile(fat, data, "steve", "txt", "deleted file"); */
+        /* writeToFile(fat, data, "steve", "txt", "deleted file"); */
+    } else{
+        printf("couldn't find the directory!\n");
+    }
     close(fd);
     exit(0);
 }
@@ -171,10 +199,10 @@ short nextFreeEntry(directory *dir){
     return -1;
 }
 
-void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext){
+void createFile(FAT * fat, DATA * data, char * filename, char * ext){
     //open the current directory
     directory *dir = malloc(sizeof(*dir));
-    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
 
     //find next free block and fill up FAT
     short freeBlock = nextFreeBlock(fat);
@@ -192,13 +220,15 @@ void createFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ex
     getDate(dir->entry[freeEntry].date);
     editExt(dir->entry[freeEntry].extension, ext);
     editFilename(dir->entry[freeEntry].filename, filename);
-    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+
+    //rewrite the data block with edited info
+    memcpy(&(data->blocks[peek()]), dir, sizeof(*dir));
 }
 
-void createDir(FAT * fat, DATA * data, int dirBlock, char * filename){
+void createDir(FAT * fat, DATA * data, char * filename){
     //open the current directory
     directory *dir = malloc(sizeof(*dir));
-    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
 
     //find next free block and fill up FAT
     short freeBlock = nextFreeBlock(fat);
@@ -215,13 +245,13 @@ void createDir(FAT * fat, DATA * data, int dirBlock, char * filename){
     getDate(dir->entry[freeEntry].date);
     editExt(dir->entry[freeEntry].extension, "   ");
     editFilename(dir->entry[freeEntry].filename, filename);
-    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+    memcpy(&(data->blocks[peek()]), dir, sizeof(*dir));
 }
 
-void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * ext, char * buf){
+void writeToFile(FAT * fat, DATA * data, char * filename, char * ext, char * buf){
     //open the current directory
     directory *dir = malloc(sizeof(*dir));
-    memcpy(dir, &(data->blocks[dirBlock]), sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
 
     //get the entry with the filename and extension
     int file = findFileEntry(dir, filename, ext);
@@ -229,20 +259,168 @@ void writeToFile(FAT * fat, DATA * data, int dirBlock, char * filename, char * e
         printf("File not found!\n");
         return;
     } else{
-        int dataBlock = dir->entry[file].startingIndex;
-        printf("File located in block: %d\n", dataBlock);
-        strcpy(data->blocks[dataBlock].sect, buf);
-        editFileSize(&dir->entry[file].fileSize, strlen(buf));
+        int startingBlock = dir->entry[file].startingIndex;
+        while (fat->file[startingBlock].next != -1){
+            startingBlock = fat->file[startingBlock].next;
+        }
+        int bufLength = strlen(buf);
+        while (bufLength > 0){
+            printf("Starting write at data block: %d\n", startingBlock);
+            printf("BufLength: %d\n", bufLength);
+            int offset = findFileOffset(fat, data, dir, file);
+            printf("Offset: %d\n", offset);
+            int n = (bufLength < (BLOCK_SIZE - offset)) ? bufLength : BLOCK_SIZE - offset;
+            printf("N: %d\n", n);
+            strncpy(data->blocks[startingBlock].sect + offset, buf + (strlen(buf) - bufLength), n);
+            editFileSize(&dir->entry[file].fileSize, n + dir->entry[file].fileSize); 
+            printf("Filesize now is: %d\n", dir->entry[file].fileSize);
+            bufLength = bufLength - n;
+            if ((offset + n) == BLOCK_SIZE){
+                int freeBlock = nextFreeBlock(fat);
+                fat->file[startingBlock].next = freeBlock;
+                fat->file[freeBlock].busy = 1;
+                fat->file[freeBlock].next = -1;
+                startingBlock = freeBlock;
+            }
+        }
     }
-    memcpy(&(data->blocks[dirBlock]), dir, sizeof(*dir));
+    getTime(dir->entry[file].time);
+    getDate(dir->entry[file].date);
+    memcpy(&(data->blocks[peek()]), dir, sizeof(*dir));
+}
+
+int findFileOffset(FAT * fat, DATA * data, directory * dir, int file){
+    int filesize = dir->entry[file].fileSize;
+    int start = dir->entry[file].startingIndex;
+    int count = 0;
+    while (fat->file[start].next != -1){
+        start = fat->file[start].next;
+        count++; 
+    }
+    return filesize - (BLOCK_SIZE * count);
 }
 
 int findFileEntry(directory * dir, char * filename, char * ext){
     int i;
     for (i = 0; i < MAX_ENTRIES; i++){
-        if (((strcmp(dir->entry[i].filename, filename)) == 0) && ((strcmp(dir->entry[i].extension, ext)) == 0)){
+        if (((strcmp(dir->entry[i].filename, filename)) == 0) && //looks for same filename
+                ((strcmp(dir->entry[i].extension, ext)) == 0) && //looks for same extension
+                (dir->entry[i].startingIndex != 0)){ //looks if the entry is a deleted file
             return i;
         }
     }
     return -1;
 }
+
+void deleteFile(FAT * fat, DATA * data, char * filename, char * ext){
+    directory *dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
+
+    int i = findFileEntry(dir, filename, ext);
+    if (i == -1){
+        printf("Can't find file!\n");
+        return;
+    } else{
+        int block = dir->entry[i].startingIndex;
+        while (fat->file[block].next != -1){
+            int temp = fat->file[block].next;
+            fat->file[block].busy = 0;
+            fat->file[block].next = -1;
+            block = temp;
+        }
+        fat->file[block].busy = 0;
+        fat->file[block].next = -1;
+        editFileSize(&dir->entry[i].fileSize, 0);
+        editIndex(&dir->entry[i].startingIndex, 0);
+    } 
+
+    memcpy(&(data->blocks[peek()]), dir, sizeof(*dir));
+}
+
+void readFile(FAT * fat, DATA * data, char * filename, char * ext){
+    directory *dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
+    int file = findFileEntry(dir, filename, ext);
+    if (file == -1){
+        printf("Can't find file!\n");
+    } else{
+        char buf[dir->entry[file].fileSize + 1];
+        memset(buf, '\0', sizeof(buf));
+        int startBlock = dir->entry[file].startingIndex;
+        char temp[BLOCK_SIZE + 1];
+
+        while(fat->file[startBlock].next != -1){
+            memset(temp, '\0', sizeof(temp));
+            memcpy(temp, data->blocks[startBlock].sect, 512);
+            strcat(buf, temp);
+            startBlock = fat->file[startBlock].next;
+        }
+        int offset = findFileOffset(fat, data, dir, file);
+        memset(temp, '\0', sizeof(temp));
+        memcpy(temp, data->blocks[startBlock].sect, offset);
+        strcat(buf, temp);
+        printf("%s\n", buf);
+    }
+    memcpy(&(data->blocks[peek()]), dir, sizeof(*dir));
+}
+
+int isEmpty(){
+    if (top == 0)
+        return 1;
+    else
+        return 0;
+}
+
+int isFull(){
+    if (top == BLOCKS)
+        return 1;
+    else
+        return 0;
+}
+
+int peek(){
+   return stack[top]; 
+}
+
+int pop(){
+    int data;
+
+    if (!isEmpty()){
+        data = stack[top];
+        top = top - 1;
+        return data;
+    } else{
+        return 0;
+    }
+}
+
+void push(int dirBlock){
+    if (!isFull()){
+        top = top + 1;
+        stack[top] = dirBlock;
+    } else{
+        printf("Stack Full\n");
+    } 
+}
+
+int cd(DATA * data, char * dirName){
+    //go to previous directory
+    if (strcmp(dirName, "..") == 0){
+        pop();
+        return 1;
+    }
+
+    directory * dir = malloc(sizeof(*dir));
+    memcpy(dir, &(data->blocks[peek()]), sizeof(*dir));
+
+    int i;
+    for (i = 0; i < MAX_ENTRIES; i++){
+        if ((strcmp(dirName, dir->entry[i].filename) == 0) && (dir->entry[i].folder == 1)){
+            push(dir->entry[i].startingIndex);
+            return 1;
+        } 
+    }
+    return 0;
+}
+
+
